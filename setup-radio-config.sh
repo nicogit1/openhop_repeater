@@ -117,12 +117,31 @@ fi
 echo "=== Step 2: Select Radio Settings ==="
 echo ""
 
+# Print one "title|description|frequency|spreading_factor|bandwidth|coding_rate"
+# line per radio preset found in the JSON given on stdin. Works for both the
+# compact API response and the pretty-printed local radio-presets.json.
+parse_radio_presets() {
+    jq -r '.. | objects | select(has("title") and has("coding_rate"))
+        | [.title, .description, .frequency, .spreading_factor, .bandwidth, .coding_rate]
+        | map(. // "" | tostring) | join("|")' 2>/dev/null
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required but not installed (e.g. sudo apt install jq)"
+    exit 1
+fi
+
 # Fetch config from API with 5 second timeout, fallback to local file
 echo "Fetching radio settings from API..."
 API_RESPONSE=$(curl -s --max-time 5 https://api.meshcore.nz/api/v1/config 2>/dev/null)
+SETTINGS=$(printf '%s' "$API_RESPONSE" | parse_radio_presets)
 
-if [ -z "$API_RESPONSE" ]; then
-    echo "Warning: Failed to fetch configuration from API (timeout or error)"
+if [ -z "$SETTINGS" ]; then
+    if [ -z "$API_RESPONSE" ]; then
+        echo "Warning: Failed to fetch configuration from API (timeout or error)"
+    else
+        echo "Warning: Could not parse radio settings from API response"
+    fi
     echo "Using local radio presets file..."
 
     LOCAL_PRESETS="$SCRIPT_DIR/radio-presets.json"
@@ -131,27 +150,11 @@ if [ -z "$API_RESPONSE" ]; then
         exit 1
     fi
 
-    API_RESPONSE=$(cat "$LOCAL_PRESETS")
-    if [ -z "$API_RESPONSE" ]; then
-        echo "Error: Failed to read local radio presets file"
+    SETTINGS=$(parse_radio_presets < "$LOCAL_PRESETS")
+    if [ -z "$SETTINGS" ]; then
+        echo "Error: Could not parse radio settings from $LOCAL_PRESETS"
         exit 1
     fi
-fi
-
-# Parse JSON entries - one per line, extracting each field
-SETTINGS=$(echo "$API_RESPONSE" | grep -o '{[^{}]*"title"[^{}]*"coding_rate"[^{}]*}' | sed 's/.*"title":"\([^"]*\)".*/\1/' | while read title; do
-    entry=$(echo "$API_RESPONSE" | grep -o "{[^{}]*\"title\":\"$title\"[^{}]*\"coding_rate\"[^{}]*}")
-    desc=$(echo "$entry" | sed 's/.*"description":"\([^"]*\)".*/\1/')
-    freq=$(echo "$entry" | sed 's/.*"frequency":"\([^"]*\)".*/\1/')
-    sf=$(echo "$entry" | sed 's/.*"spreading_factor":"\([^"]*\)".*/\1/')
-    bw=$(echo "$entry" | sed 's/.*"bandwidth":"\([^"]*\)".*/\1/')
-    cr=$(echo "$entry" | sed 's/.*"coding_rate":"\([^"]*\)".*/\1/')
-    echo "$title|$desc|$freq|$sf|$bw|$cr"
-done)
-
-if [ -z "$SETTINGS" ]; then
-    echo "Error: Could not parse radio settings from API response"
-    exit 1
 fi
 
 # Display menu
